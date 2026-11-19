@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DarajaPay STK Bot</title>
+  <style>
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+    body {
+      background: #0f172a;
+      color: #f8fafc;
+      margin: 0;
+      padding: 2rem 1rem;
+      display: flex;
+      justify-content: center;
+    }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 1.5rem;
+      width: 100%;
+      max-width: 640px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+    }
+    h1 { margin-top: 0; font-size: 1.4rem; color: #38bdf8; }
+    p.sub { color: #94a3b8; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; color: #cbd5e1; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+    input, textarea {
+      width: 100%;
+      background: #0f172a;
+      border: 1px solid #334155;
+      color: #f8fafc;
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+      font-size: 0.95rem;
+    }
+    textarea { min-height: 140px; resize: vertical; font-family: monospace; }
+    input:focus, textarea:focus { outline: none; border-color: #38bdf8; }
+    .actions { display: flex; gap: 0.75rem; margin-top: 1rem; }
+    button {
+      flex: 1;
+      padding: 0.75rem 1rem;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      cursor: pointer;
+    }
+    #startBtn { background: #10b981; color: #052e16; }
+    #startBtn:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+    #stopBtn { background: #ef4444; color: #fff; }
+    #stopBtn:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+    .status-bar {
+      margin-top: 1.25rem;
+      padding: 0.75rem;
+      background: #0f172a;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      display: flex;
+      justify-content: space-between;
+    }
+    .logs {
+      margin-top: 1rem;
+      background: #020617;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 0.75rem;
+      max-height: 260px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 0.82rem;
+    }
+    .log-item { padding: 0.35rem 0; border-bottom: 1px solid #0f172a; }
+    .ok { color: #34d399; }
+    .err { color: #f87171; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>DarajaPay STK Bot</h1>
+    <p class="sub">Enter phone numbers below (one per line or comma-separated). Requests dispatch <strong>3 seconds apart</strong>.</p>
+
+    <div class="row">
+      <div>
+        <label for="amount">Amount (KES)</label>
+        <input id="amount" type="number" min="1" value="100" required />
+      </div>
+      <div>
+        <label for="till">Till Number</label>
+        <input id="till" type="text" placeholder="e.g. 123456" required />
+      </div>
+    </div>
+
+    <div>
+      <label for="numbers">Phone Numbers (2547XXXXXXXX or 07XXXXXXXX)</label>
+      <textarea id="numbers" placeholder="254712345678&#10;0798765432&#10;254112233445"></textarea>
+    </div>
+
+    <div class="actions">
+      <button id="startBtn" onclick="startBot()">Start Sending</button>
+      <button id="stopBtn" onclick="stopBot()" disabled>Stop</button>
+    </div>
+
+    <div class="status-bar">
+      <span id="stateText">Status: Idle</span>
+      <span id="progressText">0 / 0</span>
+    </div>
+
+    <div class="logs" id="logs">
+      <div style="color:#64748b;">Logs will appear here...</div>
+    </div>
+  </div>
+
+  <script>
+    let pollTimer = null;
+
+    async function startBot() {
+      const amount = document.getElementById("amount").value.trim();
+      const tillNumber = document.getElementById("till").value.trim();
+      const rawNumbers = document.getElementById("numbers").value;
+
+      const numbers = rawNumbers
+        .split(/[\n,]+/)
+        .map(s => s.trim())
+        .filter(Boolean);
+
+      const res = await fetch("/api/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ numbers, amount, tillNumber })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Failed to start batch.");
+        return;
+      }
+
+      startPolling();
+    }
+
+    async function stopBot() {
+      await fetch("/api/stop", { method: "POST" });
+    }
+
+    function startPolling() {
+      if (pollTimer) clearInterval(pollTimer);
+      fetchStatus();
+      pollTimer = setInterval(fetchStatus, 1000);
+    }
+
+    async function fetchStatus() {
+      const res = await fetch("/api/status");
+      const data = await res.json();
+
+      document.getElementById("startBtn").disabled = data.running;
+      document.getElementById("stopBtn").disabled = !data.running;
+      document.getElementById("stateText").textContent = data.running ? "Status: Running..." : "Status: Idle";
+      document.getElementById("progressText").textContent = `${data.completed} / ${data.total}`;
+
+      const logsDiv = document.getElementById("logs");
+      if (data.logs.length > 0) {
+        logsDiv.innerHTML = data.logs
+          .map(l => {
+            const cls = l.status.startsWith("OK") ? "ok" : "err";
+            return `<div class="log-item">[${l.time}] <strong>${l.phone}</strong> — <span class="${cls}">${l.status}</span>: ${escapeHtml(l.detail)}</div>`;
+          })
+          .join("");
+        logsDiv.scrollTop = logsDiv.scrollHeight;
+      }
+
+      if (!data.running && pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    // Check status on initial load in case a job is already running
+    fetchStatus();
+  </script>
+</body>
+</html>
