@@ -1,7 +1,7 @@
 {
   "name": "darajapay-stk-bot",
-  "version": "1.0.0",
-  "description": "Web UI bot to send Daraja STK Push requests 3 seconds apart",
+  "version": "1.1.0",
+  "description": "Web UI bot to send Daraja STK Push requests 3 seconds apart for large lists",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
