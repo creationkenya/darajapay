@@ -20,15 +20,15 @@
       border-radius: 12px;
       padding: 1.5rem;
       width: 100%;
-      max-width: 700px;
+      max-width: 720px;
       box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35);
     }
     h1 { margin: 0 0 0.25rem; font-size: 1.4rem; color: #38bdf8; }
     p.sub { color: #94a3b8; font-size: 0.9rem; margin: 0 0 1.25rem; }
     label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; color: #cbd5e1; }
-    .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.85rem; margin-bottom: 1rem; }
-    @media (max-width: 600px) { .row-3 { grid-template-columns: 1fr; } }
-    input, select, textarea {
+    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; margin-bottom: 1rem; }
+    @media (max-width: 600px) { .row-2 { grid-template-columns: 1fr; } }
+    input, textarea {
       width: 100%;
       background: #0f172a;
       border: 1px solid #334155;
@@ -37,8 +37,8 @@
       padding: 0.6rem 0.75rem;
       font-size: 0.92rem;
     }
-    textarea { min-height: 150px; resize: vertical; font-family: monospace; }
-    input:focus, select:focus, textarea:focus { outline: none; border-color: #38bdf8; }
+    textarea { min-height: 170px; resize: vertical; font-family: monospace; }
+    input:focus, textarea:focus { outline: none; border-color: #38bdf8; }
     .file-row {
       display: flex;
       align-items: center;
@@ -52,10 +52,20 @@
     .count-pill {
       background: #0f172a;
       border: 1px solid #334155;
-      padding: 0.25rem 0.6rem;
+      padding: 0.25rem 0.65rem;
       border-radius: 999px;
       color: #e2e8f0;
       font-family: monospace;
+    }
+    .error-banner {
+      display: none;
+      margin-top: 0.75rem;
+      padding: 0.65rem 0.85rem;
+      border-radius: 8px;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid #ef4444;
+      color: #fca5a5;
+      font-size: 0.88rem;
     }
     .actions { display: flex; gap: 0.75rem; margin-top: 1rem; }
     button {
@@ -88,7 +98,7 @@
       border: 1px solid #1e293b;
       border-radius: 8px;
       padding: 0.75rem;
-      max-height: 250px;
+      max-height: 260px;
       overflow-y: auto;
       font-family: monospace;
       font-size: 0.8rem;
@@ -101,9 +111,9 @@
 <body>
   <div class="card">
     <h1>DarajaPay STK Bot</h1>
-    <p class="sub">Paste numbers or upload a <code>.csv</code>/<code>.txt</code> file. Requests are sent <strong>3 seconds apart</strong>.</p>
+    <p class="sub">Sends to <strong>every</strong> number you paste or upload, in order, <strong>3 seconds apart</strong>.</p>
 
-    <div class="row-3">
+    <div class="row-2">
       <div>
         <label for="amount">Amount (KES)</label>
         <input id="amount" type="number" min="1" value="100" required />
@@ -112,29 +122,22 @@
         <label for="till">Till Number</label>
         <input id="till" type="text" placeholder="e.g. 123456" required />
       </div>
-      <div>
-        <label for="batchSize">Batch Size</label>
-        <select id="batchSize">
-          <option value="all">All at once</option>
-          <option value="500" selected>First 500 numbers</option>
-          <option value="1000">First 1,000 numbers</option>
-          <option value="2500">First 2,500 numbers</option>
-        </select>
-      </div>
     </div>
 
     <div>
-      <label for="numbers">Phone Numbers (one per line, comma, or space separated)</label>
-      <textarea id="numbers" placeholder="254712345678&#10;0798765432&#10;254112233445"></textarea>
+      <label for="numbers">Phone Numbers (one per line, comma, semicolon, or tab separated)</label>
+      <textarea id="numbers" placeholder="254712345678&#10;254798765432&#10;254112233445"></textarea>
       <div class="file-row">
         <input id="csvFile" type="file" accept=".csv,.txt" style="max-width: 280px; padding: 0.35rem;" />
-        <span class="count-pill" id="parsedCount">Unique entries: 0</span>
+        <span class="count-pill" id="parsedCount">Numbers ready: 0</span>
       </div>
     </div>
 
+    <div id="errorBanner" class="error-banner"></div>
+
     <div class="actions">
-      <button id="startBtn" onclick="startBot()">Start Sending</button>
-      <button id="stopBtn" onclick="stopBot()" disabled>Stop</button>
+      <button id="startBtn" type="button" onclick="startBot()">Send to All</button>
+      <button id="stopBtn" type="button" onclick="stopBot()" disabled>Stop</button>
     </div>
 
     <div class="status-bar">
@@ -151,24 +154,27 @@
     let pollTimer = null;
     let countTimer = null;
 
-    function extractUniqueTokens(text) {
-      const seen = new Set();
-      const result = [];
-      const matches = text.match(/[\d+][\d\s\-]{6,15}/g) || [];
-      for (const m of matches) {
-        const cleaned = m.replace(/[\s\-+]/g, "");
-        if (cleaned && !seen.has(cleaned)) {
-          seen.add(cleaned);
-          result.push(cleaned);
-        }
+    function showError(msg) {
+      const banner = document.getElementById("errorBanner");
+      if (!msg) {
+        banner.style.display = "none";
+        banner.textContent = "";
+      } else {
+        banner.style.display = "block";
+        banner.textContent = msg;
       }
-      return result;
+    }
+
+    function parseAllNumbers(text) {
+      return text
+        .split(/[\r\n,;\t]+/)
+        .map(item => item.trim().replace(/[\s\-+()"'.]/g, ""))
+        .filter(Boolean);
     }
 
     function updateParsedCount() {
-      const raw = document.getElementById("numbers").value;
-      const count = extractUniqueTokens(raw).length;
-      document.getElementById("parsedCount").textContent = `Unique entries: ${count.toLocaleString()}`;
+      const count = parseAllNumbers(document.getElementById("numbers").value).length;
+      document.getElementById("parsedCount").textContent = `Numbers ready: ${count.toLocaleString()}`;
     }
 
     document.getElementById("numbers").addEventListener("input", () => {
@@ -186,42 +192,48 @@
     });
 
     async function startBot() {
+      showError("");
       const amount = document.getElementById("amount").value.trim();
       const tillNumber = document.getElementById("till").value.trim();
-      const batchSizeVal = document.getElementById("batchSize").value;
-      const rawNumbers = document.getElementById("numbers").value;
-
-      let numbers = extractUniqueTokens(rawNumbers);
-      if (batchSizeVal !== "all") {
-        numbers = numbers.slice(0, Number(batchSizeVal));
-      }
+      const numbers = parseAllNumbers(document.getElementById("numbers").value);
 
       if (numbers.length === 0) {
-        alert("Please enter or upload at least one phone number.");
+        showError("Please enter or upload at least one phone number.");
         return;
       }
 
       document.getElementById("startBtn").disabled = true;
-      document.getElementById("stateText").textContent = `Status: Queuing ${numbers.length} numbers...`;
+      document.getElementById("stateText").textContent = `Status: Queuing all ${numbers.length} numbers...`;
 
-      const res = await fetch("/api/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ numbers, amount, tillNumber })
-      });
+      try {
+        const res = await fetch("/api/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ numbers, amount, tillNumber })
+        });
 
-      const data = await res.json();
-      if (!res.ok) {
-        alert(data.error || "Failed to start batch.");
+        const data = await res.json();
+        if (!res.ok) {
+          showError(data.error || `Server rejected request (${res.status}).`);
+          document.getElementById("startBtn").disabled = false;
+          document.getElementById("stateText").textContent = "Status: Idle";
+          return;
+        }
+
+        startPolling();
+      } catch (err) {
+        showError(`Network error calling /api/start: ${err.message}`);
         document.getElementById("startBtn").disabled = false;
-        return;
+        document.getElementById("stateText").textContent = "Status: Idle";
       }
-
-      startPolling();
     }
 
     async function stopBot() {
-      await fetch("/api/stop", { method: "POST" });
+      try {
+        await fetch("/api/stop", { method: "POST" });
+      } catch (err) {
+        showError(`Failed to send stop: ${err.message}`);
+      }
     }
 
     function startPolling() {
@@ -231,36 +243,41 @@
     }
 
     async function fetchStatus() {
-      const res = await fetch("/api/status");
-      const data = await res.json();
+      try {
+        const res = await fetch("/api/status");
+        const data = await res.json();
 
-      document.getElementById("startBtn").disabled = data.running;
-      document.getElementById("stopBtn").disabled = !data.running;
+        document.getElementById("startBtn").disabled = Boolean(data.running);
+        document.getElementById("stopBtn").disabled = !data.running;
 
-      const remaining = Math.max(0, (data.total || 0) - (data.completed || 0));
-      const estMinutes = Math.ceil((remaining * 3) / 60);
+        const remaining = Math.max(0, (data.total || 0) - (data.completed || 0));
+        const estMinutes = Math.ceil((remaining * 3) / 60);
+        const rangeHint = data.firstNumber && data.lastNumber ? ` [${data.firstNumber} → ${data.lastNumber}]` : "";
 
-      document.getElementById("stateText").textContent = data.running
-        ? `Status: Running (~${estMinutes} min left)`
-        : "Status: Idle";
+        document.getElementById("stateText").textContent = data.running
+          ? `Status: Running (~${estMinutes} min left)${rangeHint}`
+          : `Status: Idle${rangeHint}`;
 
-      document.getElementById("progressText").textContent =
-        `${data.completed || 0} / ${data.total || 0} (OK: ${data.okCount || 0}, Err: ${data.errCount || 0})`;
+        document.getElementById("progressText").textContent =
+          `${data.completed || 0} / ${data.total || 0} (OK: ${data.okCount || 0}, Err: ${data.errCount || 0})`;
 
-      const logsDiv = document.getElementById("logs");
-      if (Array.isArray(data.recentLogs) && data.recentLogs.length > 0) {
-        logsDiv.innerHTML = data.recentLogs
-          .map(l => {
-            const cls = String(l.status).startsWith("OK") ? "ok" : "err";
-            return `<div class="log-item">[${l.time}] <strong>${l.phone}</strong> — <span class="${cls}">${l.status}</span>: ${escapeHtml(l.detail)}</div>`;
-          })
-          .join("");
-        logsDiv.scrollTop = logsDiv.scrollHeight;
-      }
+        const logsDiv = document.getElementById("logs");
+        if (Array.isArray(data.recentLogs) && data.recentLogs.length > 0) {
+          logsDiv.innerHTML = data.recentLogs
+            .map(l => {
+              const cls = String(l.status).startsWith("OK") ? "ok" : "err";
+              return `<div class="log-item">[${l.time}] <strong>${l.phone}</strong> — <span class="${cls}">${l.status}</span>: ${escapeHtml(l.detail)}</div>`;
+            })
+            .join("");
+          logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
 
-      if (!data.running && pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = null;
+        if (!data.running && pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      } catch (err) {
+        showError(`Status check failed: ${err.message}`);
       }
     }
 
