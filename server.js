@@ -7,23 +7,34 @@ const STK_ENDPOINT =
   process.env.STK_ENDPOINT ||
   "https://okvgadkyknfknqtxnjzz.supabase.co/functions/v1/darajapay/darajapay/stkpush";
 
-app.use(express.json());
+const MAX_RECENT_LOGS = 100;
+
+// Allow large payloads (e.g., 10,000+ numbers)
+app.use(express.json({ limit: "15mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
-// In-memory job state
 let currentJob = {
   running: false,
   stopRequested: false,
   total: 0,
   completed: 0,
-  logs: []
+  okCount: 0,
+  errCount: 0,
+  recentLogs: []
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Normalize Kenyan phone numbers to 2547XXXXXXXX / 2541XXXXXXXX
+function pushLog(entry) {
+  currentJob.recentLogs.push(entry);
+  if (currentJob.recentLogs.length > MAX_RECENT_LOGS) {
+    currentJob.recentLogs.shift();
+  }
+}
+
+// Normalize Kenyan phone numbers to 2547XXXXXXXX or 2541XXXXXXXX
 function normalizePhone(raw) {
-  let cleaned = String(raw).trim().replace(/[\s\-+]/g, "");
+  let cleaned = String(raw).trim().replace(/[\s\-+"]/g, "");
   if (cleaned.startsWith("0") && cleaned.length === 10) {
     cleaned = "254" + cleaned.slice(1);
   } else if ((cleaned.startsWith("7") || cleaned.startsWith("1")) && cleaned.length === 9) {
@@ -37,11 +48,13 @@ async function processQueue(numbers, amount, tillNumber) {
   currentJob.stopRequested = false;
   currentJob.total = numbers.length;
   currentJob.completed = 0;
-  currentJob.logs = [];
+  currentJob.okCount = 0;
+  currentJob.errCount = 0;
+  currentJob.recentLogs = [];
 
   for (let i = 0; i < numbers.length; i++) {
     if (currentJob.stopRequested) {
-      currentJob.logs.push({
+      pushLog({
         time: new Date().toLocaleTimeString(),
         phone: "-",
         status: "STOPPED",
@@ -64,15 +77,29 @@ async function processQueue(numbers, amount, tillNumber) {
         body: JSON.stringify(payload)
       });
 
-      const responseText = await response.text();
-      currentJob.logs.push({
-        time: new Date().toLocaleTimeString(),
-        phone,
-        status: response.ok ? `OK (${response.status})` : `ERR (${response.status})`,
-        detail: responseText
-      });
+      const rawText = await response.text();
+      const shortDetail = rawText.length > 200 ? rawText.slice(0, 200) + "..." : rawText;
+
+      if (response.ok) {
+        currentJob.okCount += 1;
+        pushLog({
+          time: new Date().toLocaleTimeString(),
+          phone,
+          status: `OK (${response.status})`,
+          detail: shortDetail
+        });
+      } else {
+        currentJob.errCount += 1;
+        pushLog({
+          time: new Date().toLocaleTimeString(),
+          phone,
+          status: `ERR (${response.status})`,
+          detail: shortDetail
+        });
+      }
     } catch (err) {
-      currentJob.logs.push({
+      currentJob.errCount += 1;
+      pushLog({
         time: new Date().toLocaleTimeString(),
         phone,
         status: "FAILED",
@@ -82,7 +109,7 @@ async function processQueue(numbers, amount, tillNumber) {
 
     currentJob.completed = i + 1;
 
-    // Wait 3 seconds before the next request (skip wait after the final number)
+    // 3-second delay between requests
     if (i < numbers.length - 1 && !currentJob.stopRequested) {
       await sleep(3000);
     }
@@ -108,22 +135,28 @@ app.post("/api/start", (req, res) => {
     return res.status(400).json({ error: "Provide a valid TillNumber." });
   }
 
-  const cleanedNumbers = numbers
-    .map(normalizePhone)
-    .filter((n) => /^254(7|1)\d{8}$/.test(n));
+  const seen = new Set();
+  const validNumbers = [];
 
-  if (cleanedNumbers.length === 0) {
+  for (const item of numbers) {
+    const normalized = normalizePhone(item);
+    if (/^254(7|1)\d{8}$/.test(normalized) && !seen.has(normalized)) {
+      seen.add(normalized);
+      validNumbers.push(normalized);
+    }
+  }
+
+  if (validNumbers.length === 0) {
     return res.status(400).json({
-      error: "No valid Kenyan numbers found (expected 2547XXXXXXXX, 07XXXXXXXX, etc.)."
+      error: "No valid Kenyan phone numbers found (expected 2547XXXXXXXX, 2541XXXXXXXX, or 07XXXXXXXX)."
     });
   }
 
-  // Start background queue immediately and return
-  processQueue(cleanedNumbers, String(amount).trim(), String(tillNumber).trim());
+  processQueue(validNumbers, String(amount).trim(), String(tillNumber).trim());
 
   res.json({
-    message: `Started sending ${cleanedNumbers.length} STK requests (3s interval).`,
-    total: cleanedNumbers.length
+    message: `Started sending ${validNumbers.length} STK requests (3s interval).`,
+    total: validNumbers.length
   });
 });
 
@@ -132,7 +165,7 @@ app.post("/api/stop", (req, res) => {
     return res.status(400).json({ error: "No active batch is running." });
   }
   currentJob.stopRequested = true;
-  res.json({ message: "Stop signal sent." });
+  res.json({ message: "Stop requested." });
 });
 
 app.get("/api/status", (req, res) => {
