@@ -9,8 +9,7 @@ const STK_ENDPOINT =
 
 const MAX_RECENT_LOGS = 100;
 
-// Allow large payloads (e.g., 10,000+ numbers)
-app.use(express.json({ limit: "15mb" }));
+app.use(express.json({ limit: "25mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 let currentJob = {
@@ -20,6 +19,8 @@ let currentJob = {
   completed: 0,
   okCount: 0,
   errCount: 0,
+  firstNumber: "",
+  lastNumber: "",
   recentLogs: []
 };
 
@@ -32,15 +33,10 @@ function pushLog(entry) {
   }
 }
 
-// Normalize Kenyan phone numbers to 2547XXXXXXXX or 2541XXXXXXXX
-function normalizePhone(raw) {
-  let cleaned = String(raw).trim().replace(/[\s\-+"]/g, "");
-  if (cleaned.startsWith("0") && cleaned.length === 10) {
-    cleaned = "254" + cleaned.slice(1);
-  } else if ((cleaned.startsWith("7") || cleaned.startsWith("1")) && cleaned.length === 9) {
-    cleaned = "254" + cleaned;
-  }
-  return cleaned;
+function cleanNumber(raw) {
+  return String(raw || "")
+    .trim()
+    .replace(/[\s\-+()"'.]/g, "");
 }
 
 async function processQueue(numbers, amount, tillNumber) {
@@ -50,6 +46,8 @@ async function processQueue(numbers, amount, tillNumber) {
   currentJob.completed = 0;
   currentJob.okCount = 0;
   currentJob.errCount = 0;
+  currentJob.firstNumber = numbers[0] || "";
+  currentJob.lastNumber = numbers[numbers.length - 1] || "";
   currentJob.recentLogs = [];
 
   for (let i = 0; i < numbers.length; i++) {
@@ -109,7 +107,6 @@ async function processQueue(numbers, amount, tillNumber) {
 
     currentJob.completed = i + 1;
 
-    // 3-second delay between requests
     if (i < numbers.length - 1 && !currentJob.stopRequested) {
       await sleep(3000);
     }
@@ -135,28 +132,21 @@ app.post("/api/start", (req, res) => {
     return res.status(400).json({ error: "Provide a valid TillNumber." });
   }
 
-  const seen = new Set();
-  const validNumbers = [];
+  const queue = numbers
+    .map(cleanNumber)
+    .filter((n) => n.length > 0);
 
-  for (const item of numbers) {
-    const normalized = normalizePhone(item);
-    if (/^254(7|1)\d{8}$/.test(normalized) && !seen.has(normalized)) {
-      seen.add(normalized);
-      validNumbers.push(normalized);
-    }
+  if (queue.length === 0) {
+    return res.status(400).json({ error: "No usable phone numbers found." });
   }
 
-  if (validNumbers.length === 0) {
-    return res.status(400).json({
-      error: "No valid Kenyan phone numbers found (expected 2547XXXXXXXX, 2541XXXXXXXX, or 07XXXXXXXX)."
-    });
-  }
-
-  processQueue(validNumbers, String(amount).trim(), String(tillNumber).trim());
+  processQueue(queue, String(amount).trim(), String(tillNumber).trim());
 
   res.json({
-    message: `Started sending ${validNumbers.length} STK requests (3s interval).`,
-    total: validNumbers.length
+    message: `Started sending to all ${queue.length} numbers (3s interval).`,
+    total: queue.length,
+    firstNumber: queue[0],
+    lastNumber: queue[queue.length - 1]
   });
 });
 
